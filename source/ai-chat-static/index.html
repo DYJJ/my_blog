@@ -192,6 +192,97 @@
       font-size: 0.8rem;
       user-select: none;
     }
+    
+    /* 知识库投喂相关样式 */
+    .knowledge-base {
+      margin-top: 20px;
+      padding: 15px;
+      background-color: var(--grey-1, #f0f0f0);
+      border-radius: 10px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+    
+    .knowledge-base h3 {
+      margin-top: 0;
+      margin-bottom: 10px;
+      color: var(--color-primary, #4a89dc);
+      font-size: 1.2rem;
+    }
+    
+    .file-upload-container {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    
+    .file-upload-label {
+      display: inline-block;
+      padding: 8px 15px;
+      background-color: var(--color-primary, #4a89dc);
+      color: white;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    
+    .file-upload-label:hover {
+      background-color: var(--color-primary-dark, #1976d2);
+    }
+    
+    #file-upload {
+      display: none;
+    }
+    
+    .file-name {
+      flex: 1;
+      font-size: 0.9rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    
+    .file-clear {
+      cursor: pointer;
+      color: var(--color-red, #dc3545);
+      font-size: 0.9rem;
+    }
+    
+    .knowledge-files {
+      margin-top: 10px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    
+    .knowledge-file {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 10px;
+      background-color: var(--grey-0, #fff);
+      margin-bottom: 5px;
+      border-radius: 5px;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+    
+    .knowledge-file-name {
+      flex: 1;
+      font-size: 0.9rem;
+    }
+    
+    .knowledge-file-remove {
+      cursor: pointer;
+      color: var(--color-red, #dc3545);
+      margin-left: 10px;
+    }
+    
+    .knowledge-toggle {
+      text-align: center;
+      cursor: pointer;
+      margin-top: 5px;
+      color: var(--color-primary, #4a89dc);
+      font-size: 0.9rem;
+    }
   </style>
 </head>
 <body>
@@ -219,10 +310,35 @@
       </div>
     </div>
     
+    <!-- 知识库投喂区域 -->
+    <div class="knowledge-base">
+      <h3>知识库投喂</h3>
+      <p>上传文件，AI将能读取并理解文件内容</p>
+      
+      <div class="file-upload-container">
+        <label for="file-upload" class="file-upload-label">选择文件</label>
+        <input type="file" id="file-upload" accept=".txt,.md,.pdf,.docx,.json,.csv,.html,.js,.py,.java,.c,.cpp,.h,.php">
+        <span class="file-name" id="file-name">未选择文件</span>
+        <span class="file-clear" id="file-clear" style="display: none;">清除</span>
+      </div>
+      
+      <div class="knowledge-files" id="knowledge-files">
+        <!-- 上传的文件将在这里显示 -->
+      </div>
+      
+      <div class="knowledge-toggle" id="knowledge-toggle">
+        显示/隐藏知识库
+      </div>
+    </div>
+    
     <a href="/" class="back-link">返回首页</a>
   </div>
   
   <script>
+    // 文件存储
+    let knowledgeFiles = [];
+    let knowledgeBaseVisible = true;
+    
     // 在全局范围内定义函数，确保可以直接从HTML调用
     function addMessage(content, role, type) {
       const chatMessages = document.getElementById('chat-messages');
@@ -241,6 +357,34 @@
       chatMessages.appendChild(messageDiv);
       
       chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+    
+    // 处理文件读取
+    function readFileAsText(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = event => resolve(event.target.result);
+        reader.onerror = error => reject(error);
+        reader.readAsText(file);
+      });
+    }
+    
+    // 获取文件扩展名
+    function getFileExtension(filename) {
+      return filename.slice((filename.lastIndexOf(".") - 1 >>> 0) + 2);
+    }
+    
+    // 从知识库构建上下文
+    function buildContextFromKnowledgeBase() {
+      if (knowledgeFiles.length === 0) return "";
+      
+      let context = "\n\n以下是一些参考资料，请根据这些信息回答问题：\n\n";
+      
+      knowledgeFiles.forEach((file, index) => {
+        context += `文档${index + 1}（${file.name}）：\n${file.content}\n\n`;
+      });
+      
+      return context;
     }
     
     function sendChatMessage() {
@@ -266,6 +410,10 @@
       loadingDiv.innerHTML = '<div class="message-content">思考中...</div>';
       chatMessages.appendChild(loadingDiv);
       
+      // 从知识库构建上下文
+      const knowledgeContext = buildContextFromKnowledgeBase();
+      const promptWithContext = message + knowledgeContext;
+      
       // 发送请求
       fetch('http://localhost:11434/api/generate', {
         method: 'POST',
@@ -274,7 +422,7 @@
         },
         body: JSON.stringify({
           model: 'deepseek-r1:8b',
-          prompt: message,
+          prompt: promptWithContext,
           stream: false
         })
       })
@@ -336,9 +484,120 @@
       });
     }
     
-    // 确保页面加载完成后，添加一条调试信息
+    // 添加知识文件到列表
+    function addKnowledgeFile(file, content) {
+      // 添加到内存中
+      knowledgeFiles.push({
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        content: content
+      });
+      
+      // 更新UI
+      updateKnowledgeFilesUI();
+    }
+    
+    // 更新知识文件UI
+    function updateKnowledgeFilesUI() {
+      const filesContainer = document.getElementById('knowledge-files');
+      filesContainer.innerHTML = '';
+      
+      if (knowledgeFiles.length === 0) {
+        filesContainer.innerHTML = '<div style="text-align: center; color: var(--grey-5);">未添加任何文件</div>';
+        return;
+      }
+      
+      knowledgeFiles.forEach((file, index) => {
+        const fileElement = document.createElement('div');
+        fileElement.className = 'knowledge-file';
+        fileElement.innerHTML = `
+          <span class="knowledge-file-name">${file.name} (${(file.size / 1024).toFixed(1)} KB)</span>
+          <span class="knowledge-file-remove" data-index="${index}">删除</span>
+        `;
+        filesContainer.appendChild(fileElement);
+      });
+      
+      // 添加删除事件监听
+      document.querySelectorAll('.knowledge-file-remove').forEach(btn => {
+        btn.addEventListener('click', function() {
+          const index = parseInt(this.getAttribute('data-index'));
+          knowledgeFiles.splice(index, 1);
+          updateKnowledgeFilesUI();
+        });
+      });
+    }
+    
+    // 确保页面加载完成后，初始化知识库功能
     window.onload = function() {
-      console.log('页面已加载，聊天功能已初始化');
+      console.log('页面已加载，聊天功能和知识库功能已初始化');
+      
+      // 文件上传处理
+      const fileUpload = document.getElementById('file-upload');
+      const fileName = document.getElementById('file-name');
+      const fileClear = document.getElementById('file-clear');
+      const knowledgeToggle = document.getElementById('knowledge-toggle');
+      const knowledgeBase = document.querySelector('.knowledge-base');
+      
+      // 初始化知识文件UI
+      updateKnowledgeFilesUI();
+      
+      // 文件选择处理
+      fileUpload.addEventListener('change', async function(e) {
+        if (this.files.length === 0) return;
+        
+        const file = this.files[0];
+        fileName.textContent = file.name;
+        fileClear.style.display = 'inline';
+        
+        try {
+          // 读取文件内容
+          const content = await readFileAsText(file);
+          
+          // 添加到知识库
+          addKnowledgeFile(file, content);
+          
+          // 清除选择的文件
+          this.value = '';
+          fileName.textContent = '文件已添加到知识库';
+          setTimeout(() => {
+            fileName.textContent = '未选择文件';
+            fileClear.style.display = 'none';
+          }, 2000);
+        } catch (error) {
+          console.error('读取文件失败:', error);
+          fileName.textContent = '读取文件失败';
+          setTimeout(() => {
+            fileName.textContent = '未选择文件';
+            fileClear.style.display = 'none';
+          }, 2000);
+        }
+      });
+      
+      // 清除文件选择
+      fileClear.addEventListener('click', function() {
+        fileUpload.value = '';
+        fileName.textContent = '未选择文件';
+        fileClear.style.display = 'none';
+      });
+      
+      // 显示/隐藏知识库
+      knowledgeToggle.addEventListener('click', function() {
+        const filesContainer = document.getElementById('knowledge-files');
+        const uploadContainer = document.querySelector('.file-upload-container');
+        
+        if (knowledgeBaseVisible) {
+          filesContainer.style.display = 'none';
+          uploadContainer.style.display = 'none';
+          this.textContent = '显示知识库';
+        } else {
+          filesContainer.style.display = 'block';
+          uploadContainer.style.display = 'flex';
+          this.textContent = '隐藏知识库';
+        }
+        
+        knowledgeBaseVisible = !knowledgeBaseVisible;
+      });
     };
   </script>
 </body>
