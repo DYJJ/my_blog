@@ -1,0 +1,3 @@
+启动命令（在my_blog目录下输入）：
+
+hexo server
