@@ -387,6 +387,27 @@
       return context;
     }
     
+    // 添加一个流式显示文本的辅助函数
+    function typeWriter(element, text, speed = 30) {
+      return new Promise(resolve => {
+        let i = 0;
+        element.textContent = "";
+        
+        function type() {
+          if (i < text.length) {
+            element.textContent += text.charAt(i);
+            i++;
+            // 删除强制滚动行为，允许用户自由滚动
+            setTimeout(type, speed);
+          } else {
+            resolve();
+          }
+        }
+        
+        type();
+      });
+    }
+    
     function sendChatMessage() {
       const chatInput = document.getElementById('chat-input');
       const sendButton = document.getElementById('send-button');
@@ -403,18 +424,37 @@
       addMessage(message, 'user');
       chatInput.value = '';
       
-      // 添加加载状态
+      // 创建思考和回答的元素
       const chatMessages = document.getElementById('chat-messages');
-      const loadingDiv = document.createElement('div');
-      loadingDiv.className = 'message assistant loading';
-      loadingDiv.innerHTML = '<div class="message-content">思考中...</div>';
-      chatMessages.appendChild(loadingDiv);
+      
+      // 创建思考元素
+      const thinkingDiv = document.createElement('div');
+      thinkingDiv.className = 'message assistant thinking';
+      const thinkingContent = document.createElement('div');
+      thinkingContent.className = 'message-content';
+      thinkingContent.textContent = "";
+      thinkingDiv.appendChild(thinkingContent);
+      chatMessages.appendChild(thinkingDiv);
+      
+      // 创建回答元素（初始隐藏）
+      const answerDiv = document.createElement('div');
+      answerDiv.className = 'message assistant answer';
+      answerDiv.style.display = 'none';
+      const answerContent = document.createElement('div');
+      answerContent.className = 'message-content';
+      answerDiv.appendChild(answerContent);
+      chatMessages.appendChild(answerDiv);
       
       // 从知识库构建上下文
       const knowledgeContext = buildContextFromKnowledgeBase();
       const promptWithContext = message + knowledgeContext;
       
-      // 发送请求
+      // 标记当前模式和缓冲区
+      let isInThinkingMode = false;
+      let thinkBuffer = '';
+      let answerBuffer = '';
+      
+      // 发送API请求
       fetch('http://localhost:11434/api/generate', {
         method: 'POST',
         headers: {
@@ -423,57 +463,99 @@
         body: JSON.stringify({
           model: 'deepseek-r1:8b',
           prompt: promptWithContext,
-          stream: false
+          stream: true // 使用流式响应
         })
       })
       .then(response => {
-        // 移除加载状态
-        chatMessages.removeChild(loadingDiv);
-        
         if (!response.ok) {
           throw new Error('API请求失败');
         }
-        return response.json();
-      })
-      .then(data => {
-        // 处理响应，分离思考和回答
-        const response = data.response;
         
-        // 查找<think>标签
-        const thinkRegex = /<think>([\s\S]*?)<\/think>/g;
-        let match;
-        let lastIndex = 0;
-        let hasThinking = false;
+        // 处理流式响应
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
         
-        // 逐个处理所有<think>标签
-        while ((match = thinkRegex.exec(response)) !== null) {
-          hasThinking = true;
-          const thinking = match[1].trim();
-          
-          if (thinking) {
-            // 显示思考内容
-            addMessage(thinking, 'assistant', 'thinking');
+        return new Promise((resolve, reject) => {
+          function processStream() {
+            reader.read().then(({ done, value }) => {
+              if (done) {
+                return resolve();
+              }
+              
+              // 解码新的数据块
+              const chunk = decoder.decode(value, { stream: true });
+              buffer += chunk;
+              
+              // 处理可能跨块的行
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || ''; // 保留最后一个可能不完整的行
+              
+              // 处理每一行
+              for (const line of lines) {
+                if (!line.trim()) continue;
+                
+                try {
+                  // 解析JSON对象
+                  const data = JSON.parse(line);
+                  
+                  if (data.response) {
+                    const text = data.response;
+                    
+                    // 根据内容判断是思考还是回答
+                    if (text.includes('<think>')) {
+                      // 进入思考模式
+                      isInThinkingMode = true;
+                      const content = text.replace('<think>', '');
+                      thinkBuffer += content;
+                      thinkingContent.textContent = thinkBuffer;
+                    } 
+                    else if (text.includes('</think>')) {
+                      // 结束思考模式
+                      isInThinkingMode = false;
+                      const content = text.replace('</think>', '');
+                      if (content.trim()) {
+                        thinkBuffer += content;
+                        thinkingContent.textContent = thinkBuffer;
+                      }
+                      
+                      // 显示回答区域
+                      answerDiv.style.display = 'block';
+                    }
+                    else if (isInThinkingMode) {
+                      // 继续思考
+                      thinkBuffer += text;
+                      thinkingContent.textContent = thinkBuffer;
+                    }
+                    else {
+                      // 回答模式
+                      if (answerDiv.style.display === 'none') {
+                        answerDiv.style.display = 'block';
+                      }
+                      answerBuffer += text;
+                      answerContent.textContent = answerBuffer;
+                    }
+                  }
+                } catch (e) {
+                  console.warn('解析JSON行失败:', line, e);
+                }
+              }
+              
+              // 继续处理流
+              return processStream();
+            }).catch(reject);
           }
           
-          lastIndex = match.index + match[0].length;
-        }
-        
-        // 提取非<think>部分作为最终答案
-        let finalAnswer = response;
-        
-        if (hasThinking) {
-          // 如果有思考内容，则移除所有<think>标签，获取最终答案
-          finalAnswer = response.replace(thinkRegex, '').trim();
-        }
-        
-        if (finalAnswer) {
-          // 显示最终答案
-          addMessage(finalAnswer, 'assistant', 'answer');
-        }
+          // 开始处理流
+          processStream();
+        });
       })
       .catch(error => {
         console.error('发送消息失败:', error);
-        addMessage('抱歉，发生了错误，请稍后再试。', 'assistant', 'error');
+        
+        // 移除思考中文本，更新为错误信息
+        thinkingContent.textContent = '抱歉，发生了错误，请稍后再试。';
+        thinkingDiv.className = 'message assistant error';
       })
       .finally(() => {
         // 恢复输入和按钮状态
@@ -482,6 +564,23 @@
         sendButton.textContent = '发送';
         chatInput.focus();
       });
+    }
+    
+    // 模拟打字效果的函数
+    function simulateTyping(element, text, delay = 30) {
+      let index = 0;
+      
+      function type() {
+        if (index < text.length) {
+          element.textContent += text.charAt(index);
+          index++;
+          setTimeout(type, delay);
+        }
+      }
+      
+      // 清空内容并开始打字
+      element.textContent = '';
+      type();
     }
     
     // 添加知识文件到列表

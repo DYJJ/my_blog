@@ -1,3 +1,5 @@
 启动命令（在my_blog目录下输入）：
 
+ollama run deepseek-r1:8b
+
 hexo server
